@@ -6,3 +6,4 @@
     - role: common
     - role: caddy
     - role: jupyterhub
+    - role: security

@@ -1,7 +1,7 @@
 # JupyterHub + Caddy Deployment (Ansible)
 
 This project automates the deployment of a **secure, production-ready JupyterHub** instance behind **Caddy** with automatic HTTPS (via ACME / Let's Encrypt).  
-It installs all dependencies, configures JupyterHub, creates a service user, and enables HTTPS using your DNS domain.  
+It installs all dependencies, configures JupyterHub, enforces web-level security, restricts access to a Linux group, and disables terminals in JupyterLab for a tighter attack surface.  
 Everything runs idempotently through modular Ansible roles.
 
 ---
@@ -10,37 +10,12 @@ Everything runs idempotently through modular Ansible roles.
 
 | Component | Purpose |
 |------------|----------|
-| **JupyterHub** | Multi-user notebook server (Python virtual environment at `/opt/jhub-venv`) |
+| **JupyterHub** | Multi-user notebook server (Python venv at `/opt/jhub-venv`) |
 | **Caddy** | Reverse proxy and automatic HTTPS via Let's Encrypt |
 | **PAM Authentication** | Local Linux user authentication for JupyterHub |
+| **Idle Culler** | Automatically stops idle notebook servers |
 | **Ansible Roles** | Modular structure for reuse and clean configuration |
-| **Systemd Services** | Persistent management of Caddy and JupyterHub |
-
----
-
-## 🧩 Folder Structure
-
-```
-ansible/
-├── inventory/
-│   └── hosts
-├── group_vars/
-│   └── all.yml
-├── site.yml
-├── roles/
-│   ├── common/
-│   │   └── tasks/main.yml
-│   ├── caddy/
-│   │   ├── tasks/main.yml
-│   │   ├── handlers/main.yml
-│   │   └── templates/Caddyfile.j2
-│   └── jupyterhub/
-│       ├── tasks/main.yml
-│       ├── handlers/main.yml
-│       ├── templates/jupyterhub_config.py.j2
-│       └── files/pam.d.jupyterhub
-└── README.md
-```
+| **Systemd Services** | Persistent management of Caddy, JupyterHub, and Idle Culler |
 
 ---
 
@@ -52,139 +27,85 @@ All global variables are defined in `group_vars/all.yml`:
 domain_name: "lab.example.com"     # DNS entry pointing to this machine
 acme_email: "admin@example.com"    # Email for Let's Encrypt notifications
 
-allow_all: true                    # Allow all valid Linux users to log in
-# allow_all: false                  # Restrict to specific users
-allowed_users: ["gerrit", "alice"]
+# JupyterHub access policy
+allow_all: false                   # Restrict to specific users/groups
+allowed_users: []                  # Not used when allow_all=false and group gate active
 admin_users: ["gerrit"]            # Hub admin users
 
-jhub_user: jhub                    # System account for JupyterHub service
+# Group gate (only these users can log in)
+jhub_group_name: jhub
+jhub_group_members: ["gerrit"]
+
+# Core paths
+jhub_user: jhub
 venv_dir: /opt/jhub-venv
 hub_state_dir: /var/lib/jupyterhub
 hub_cfg_dir: /etc/jupyterhub
 
-manage_ufw: true                   # Open ports 22, 80, 443 if UFW is active
+# Optional firewall management (if UFW active)
+manage_ufw: true
 ```
 
 ---
 
-## 🏗️ How to Deploy
+## 🧰 Security Features
 
-### 1. Prepare DNS and Firewall
-- Create an **A record** for your domain (e.g., `lab.example.com`) pointing to your server’s public IP.
-- Allow inbound **TCP 80** and **TCP 443** (HTTP + HTTPS).
+### ✅ HTTPS by Default
+- Caddy provisions and renews TLS certificates via ACME (Let's Encrypt).  
+- HSTS and safe response headers are set automatically.  
+- All traffic between users and JupyterHub is fully encrypted.
 
-### 2. Run the Playbook
+### ✅ Reverse Proxy Isolation
+- Caddy listens on ports 80/443 only and forwards to `127.0.0.1:8000`.  
+- JupyterHub never binds to a public interface.
+
+### ✅ Cookie and Session Hardening
+JupyterHub is configured to:
+```python
+c.JupyterHub.trust_xheaders = True
+c.JupyterHub.cookie_secure = True
+c.JupyterHub.cookie_options = {"SameSite": "Lax", "httponly": True}
+c.JupyterHub.cookie_max_age_days = 7
+```
+This ensures that:
+- Cookies are HTTPS-only (`Secure` flag)
+- They can’t be accessed via JavaScript (`HttpOnly`)
+- SameSite=Lax prevents cross-site CSRF exploits
+
+### ✅ PAM Group Restriction
+Only Linux users in the `jhub` group may log in:
+```python
+c.PAMAuthenticator.allowed_groups = {"jhub"}
+```
+Define members via Ansible in `jhub_group_members`.
+
+### ✅ Idle Culler (Automatic Logout of Idle Sessions)
+The **idle culler** stops inactive notebook servers after 1 hour:
 ```bash
-cd ansible
-sudo apt update && sudo apt install -y ansible
-ansible-playbook -i inventory/hosts site.yml
+--timeout=3600 --cull-every=300 --concurrency=5
 ```
+It runs as a separate systemd service (`jupyterhub-idle-culler`) and frees resources while reducing risk from forgotten sessions.
 
-### 3. Access JupyterHub
-- Open **https://lab.example.com** in a browser.
-- Log in with any valid Linux user (create with `sudo adduser <name>`).
-- Admin users (`admin_users`) can access **/hub/admin**.
-
----
-
-## 🔒 Security
-
-- HTTPS certificates are automatically managed via the [ACME protocol](https://datatracker.ietf.org/doc/html/rfc8555) (Let’s Encrypt).
-- `jupyterhub_cookie_secret` is generated once at `/var/lib/jupyterhub/jupyterhub_cookie_secret` for session security.
-- JupyterHub runs under a **non-root** service account (`jhub`) for safety.
-- All user authentication is done via **PAM** using local Linux credentials.
-- Caddy automatically renews certificates — no manual cron jobs required.
-
----
-
-## 🧰 Service Management
-
-| Action | Command |
-|--------|----------|
-| View Caddy logs | `journalctl -u caddy -n 100 --no-pager` |
-| View JupyterHub logs | `journalctl -u jupyterhub -n 100 --no-pager` |
-| Restart JupyterHub | `sudo systemctl restart jupyterhub` |
-| Restart Caddy | `sudo systemctl restart caddy` |
-| Enable both at boot | `sudo systemctl enable jupyterhub caddy` |
-
----
-
-## 🧪 Verification
-
-After deployment, verify both internal and external routes:
-
-```bash
-# Local service check
-curl -I http://127.0.0.1:8000/hub/login
-
-# External HTTPS test
-curl -vkI https://lab.example.com/hub/login
+### ✅ Terminals Disabled
+Terminals are disabled inside JupyterLab and Classic Notebook:
+```python
+c.Spawner.args = [
+    "--ServerApp.terminals_enabled=False",
+    "--NotebookApp.terminals_enabled=False"
+]
 ```
+This prevents shell access through the web UI.
 
-Expected response:
-```
-HTTP/1.1 200 OK
-Via: 1.1 Caddy
-X-JupyterHub-Version: 5.x.x
-```
+### ✅ Least Privilege Service Account
+JupyterHub runs as its own system user (`jhub`) with `/usr/sbin/nologin`, isolating it from root.
 
----
-
-## 🧠 Technical Notes
-
-### JupyterHub Cookie Secret
-The file `/var/lib/jupyterhub/jupyterhub_cookie_secret` contains a random 32-byte key used to **sign and verify session cookies**.  
-If this file changes or is deleted, all users will be logged out and new sessions will be created.
-
-### ACME (Automatic Certificate Management Environment)
-Caddy uses the ACME protocol to automatically request and renew TLS certificates from Let’s Encrypt.  
-No manual certificate handling or renewal tasks are required.
-
-### Service User
-The system user `jhub` (or the name specified in `group_vars/all.yml`) runs the JupyterHub service.  
-It uses `/usr/sbin/nologin` as its shell to prevent interactive logins, following least-privilege security principles.
-
-### Handlers
-Ansible **handlers** (e.g., `reload caddy`, `reload jupyterhub`) are triggered only when related configuration files change.  
-This avoids unnecessary service restarts and keeps the deployment idempotent.
+### ✅ VPN-Aware Deployment
+The system assumes SSH access is already restricted through a secure VPN.  
+No SSH hardening is applied in Ansible, keeping compatibility with your lab’s access policies.
 
 ---
 
-## 🧰 Extending the Playbook
-
-You can easily extend this setup to:
-- **Isolate user storage** → mount `/data/{{ username }}` for each user.
-- **Integrate with HPC or Slurm** → replace the default spawner with `BatchSpawner` or `SlurmSpawner`.
-- **Support multi-node environments** → modify `inventory/hosts` for multiple machines.
-- **Add OAuth or LDAP authentication** → use `OAuthenticator` instead of PAM.
-
----
-
-## 🪪 License
-
-MIT License.  
-Created by **Gerrit Botha**, 2025.  
-Includes open-source components: [JupyterHub](https://jupyter.org/hub), [Caddy](https://caddyserver.com), [Ansible](https://ansible.com), and [Let’s Encrypt](https://letsencrypt.org).
-
----
-
-## 💬 Troubleshooting
-
-If login or proxy fails, check:
-
-```bash
-journalctl -u jupyterhub -n 50
-journalctl -u caddy -n 50
-```
-
-Typical issues:
-- **DNS not resolving** → fix A-record or hosts entry.  
-- **Firewall blocking 80/443** → open ports or disable upstream proxy restrictions.  
-- **Permission errors** → ensure `/etc/jupyterhub` and `/var/lib/jupyterhub` are owned by the service user.
-
----
-
-## 🧭 Architecture Diagram
+## 🧱 System Architecture
 
 ```
        ┌──────────────┐
@@ -195,25 +116,112 @@ Typical issues:
               ▼
        ┌──────────────┐
        │    Caddy     │
-       │ (Reverse Proxy)
-       │  Auto-HTTPS  │
+       │ Reverse Proxy│
+       │ Auto-HTTPS    │
        └──────┬───────┘
               │ HTTP (127.0.0.1:8000)
               ▼
        ┌──────────────┐
        │ JupyterHub   │
        │ (PAM Auth,   │
-       │ Spawns Lab)  │
+       │ Group Gate)  │
        └──────┬───────┘
               │
               ▼
        ┌──────────────┐
        │ JupyterLab   │
-       │ (User Server)│
+       │ (Terminals ❌│
+       │ Idle Culler ✅)
        └──────────────┘
 ```
 
 ---
 
-✨ **After deployment:**  
-You’ll have a fully functional, HTTPS-secured JupyterHub accessible at your chosen domain — automatically renewed, managed, and easy to extend through Ansible.
+## 🏗️ How to Deploy
+
+### 1️⃣ Prepare DNS and Firewall
+- Create an **A record** for your domain (e.g. `lab.example.com`) pointing to your server’s public IP.
+- Allow inbound **TCP 80** and **TCP 443** (HTTP + HTTPS).
+
+### 2️⃣ Run the Playbook
+```bash
+cd ansible
+sudo apt update && sudo apt install -y ansible
+ansible-playbook -i inventory/hosts site.yml
+```
+
+### 3️⃣ Access the Hub
+- Open **https://lab.example.com**
+- Log in with a Linux user who is part of the `jhub` group
+- Admins (`admin_users`) can visit `/hub/admin`
+
+---
+
+## 🔍 Verifying Security
+
+**Check HTTPS headers:**
+```bash
+curl -I https://lab.example.com
+```
+You should see:
+```
+Strict-Transport-Security: max-age=31536000; includeSubDomains; preload
+X-Content-Type-Options: nosniff
+X-Frame-Options: DENY
+Referrer-Policy: strict-origin-when-cross-origin
+```
+
+**Check JupyterHub cookie flags:**
+- Open browser DevTools → Application → Cookies
+- Verify `Secure` and `HttpOnly` flags are enabled.
+
+**Check group gate:**
+```bash
+id gerrit  # must include 'jhub'
+```
+
+**Check idle culler:**
+```bash
+systemctl status jupyterhub-idle-culler
+```
+
+---
+
+## 🧠 Technical Notes
+
+| Component | Purpose |
+|------------|----------|
+| **jupyterhub_cookie_secret** | Random key for signing cookies; persisted at `/var/lib/jupyterhub/jupyterhub_cookie_secret` |
+| **Idle Culler** | Terminates notebook servers after inactivity |
+| **Allowed Groups** | PAM check ensures only defined group members can authenticate |
+| **Spawner Args** | Disable terminal access |
+| **Caddy** | Manages TLS certificates, HSTS, and proxy headers |
+| **Systemd Units** | jupyterhub.service, caddy.service, jupyterhub-idle-culler.service |
+
+---
+
+## 🪪 License
+
+MIT License  
+Created by **Gerrit Botha**, 2025  
+Includes open-source components: [JupyterHub](https://jupyter.org/hub), [Caddy](https://caddyserver.com), [Ansible](https://ansible.com), and [Let’s Encrypt](https://letsencrypt.org)
+
+---
+
+## 💬 Troubleshooting
+
+| Issue | Fix |
+|-------|-----|
+| **Users can’t log in** | Ensure they’re in the `jhub` group: `usermod -aG jhub username` |
+| **Terminals still visible** | Clear browser cache; verify `Spawner.args` are applied |
+| **Idle culler not running** | `systemctl enable --now jupyterhub-idle-culler` |
+| **Cookies not Secure** | Ensure you access via `https://` and `trust_xheaders=True` is set |
+| **DNS or HTTPS fails** | Check that ports 80/443 are open and domain resolves to the machine |
+
+---
+
+✨ After deployment, you’ll have a **VPN-protected, HTTPS-secured JupyterHub** where:  
+- Only authorized users can log in,  
+- Idle servers self-terminate,  
+- Terminals are disabled,  
+- All communication is encrypted end-to-end.

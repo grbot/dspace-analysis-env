@@ -5,23 +5,37 @@ c.JupyterHub.authenticator_class = PAMAuthenticator
 c.PAMAuthenticator.service = "jupyterhub"
 c.PAMAuthenticator.open_sessions = True
 
-# Bind on localhost; Caddy terminates TLS
+# --- Bind & state ---
 c.JupyterHub.bind_url = "http://127.0.0.1:8000"
-
-# Hub state
 c.JupyterHub.cookie_secret_file = "{{ hub_state_dir }}/jupyterhub_cookie_secret"
 c.JupyterHub.db_url = "sqlite:////{{ hub_state_dir }}/jupyterhub.sqlite"
 
-# Start users in JupyterLab
-c.Spawner.default_url = "/lab"
+# --- Reverse proxy awareness (we're behind Caddy TLS) ---
+c.JupyterHub.trust_xheaders = True
 
-# Authorization policy
+# --- Session / cookie hardening ---
+c.JupyterHub.cookie_max_age_days = 7
+c.JupyterHub.cookie_secure = True
+c.JupyterHub.cookie_options = {"SameSite": "Lax", "httponly": True}
+
+# --- Authorization policy ---
 {% if allow_all %}
 c.Authenticator.allow_all = True
 {% else %}
 c.Authenticator.allow_all = False
 c.Authenticator.allowed_users = {{ allowed_users | to_json }}
 {% endif %}
-
-# Hub admins
 c.Authenticator.admin_users = {{ admin_users | to_json }}
+
+# --- Group gate (only members of this Linux group may log in) ---
+c.PAMAuthenticator.allowed_groups = {"{{ jhub_group_name | default('jhub') }}"}
+
+# --- Default user experience ---
+c.Spawner.default_url = "/lab"
+
+# --- Disable terminals in JupyterLab/Notebook servers ---
+# Works with Jupyter Server (Lab) and Classic Notebook (belt-and-braces)
+c.Spawner.args = [
+    "--ServerApp.terminals_enabled=False",
+    "--NotebookApp.terminals_enabled=False"
+]

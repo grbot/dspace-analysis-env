@@ -13,3 +13,7 @@ hub_cfg_dir: /etc/jupyterhub
 
 # Whether to open firewall if UFW is enabled
 manage_ufw: true
+
+# Group gate
+jhub_group_name: jhub
+jhub_group_members: ["gerrit"]

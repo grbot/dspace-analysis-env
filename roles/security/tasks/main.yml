@@ -1,0 +1,48 @@
+---
+# Ensure the gate group exists and members are added
+- name: Ensure JupyterHub gate group exists
+  group:
+    name: "{{ jhub_group_name | default('jhub') }}"
+    state: present
+
+- name: Ensure group members present
+  user:
+    name: "{{ item }}"
+    groups: "{{ jhub_group_name }}"
+    append: true
+  loop: "{{ jhub_group_members }}"
+  when: jhub_group_members is defined
+
+# Install idle culler into the Hub venv
+- name: Install JupyterHub idle culler
+  command: "{{ venv_dir }}/bin/python -m pip install -U jupyterhub-idle-culler"
+
+# Install and enable the idle culler service
+- name: Install idle culler systemd service
+  copy:
+    dest: /etc/systemd/system/jupyterhub-idle-culler.service
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=JupyterHub Idle Culler
+      After=jupyterhub.service
+      Requires=jupyterhub.service
+
+      [Service]
+      ExecStart={{ venv_dir }}/bin/python -m jupyterhub_idle_culler \
+        --timeout=3600 --cull-every=300 --concurrency=5 \
+        --url=http://127.0.0.1:8000/hub/api
+      Restart=on-failure
+
+      [Install]
+      WantedBy=multi-user.target
+  notify:
+    - daemon-reload
+    - restart idle culler
+
+# Restart Hub to pick up config changes (cookies/headers/args/group gate)
+- name: Restart JupyterHub
+  systemd:
+    name: jupyterhub
+    state: restarted
+    enabled: true

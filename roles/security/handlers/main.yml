@@ -1,0 +1,10 @@
+---
+- name: daemon-reload
+  systemd:
+    daemon_reload: true
+
+- name: restart idle culler
+  systemd:
+    name: jupyterhub-idle-culler
+    state: started
+    enabled: true
