@@ -1,0 +1,39 @@
+---
+- name: Ensure base packages
+  apt:
+    update_cache: true
+    state: present
+    pkg:
+      - python3
+      - python3-venv
+      - python3-pip
+      - python3-full
+      - build-essential
+      - nodejs
+      - npm
+      - git
+      - curl
+      - debian-keyring
+      - debian-archive-keyring
+      - apt-transport-https
+      - ufw
+
+- name: Ensure service user exists
+  user:
+    name: "{{ jhub_user }}"
+    shell: /usr/sbin/nologin
+    system: true
+    create_home: true
+
+- name: Open UFW (if enabled)
+  when: manage_ufw
+  block:
+    - command: ufw status
+      register: ufw_status
+      changed_when: false
+    - command: ufw allow 22/tcp
+      when: "'Status: active' in ufw_status.stdout"
+    - command: ufw allow 80/tcp
+      when: "'Status: active' in ufw_status.stdout"
+    - command: ufw allow 443/tcp
+      when: "'Status: active' in ufw_status.stdout"

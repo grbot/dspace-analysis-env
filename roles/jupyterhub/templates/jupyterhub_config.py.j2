@@ -1,0 +1,27 @@
+c = get_config()
+
+from jupyterhub.auth import PAMAuthenticator
+c.JupyterHub.authenticator_class = PAMAuthenticator
+c.PAMAuthenticator.service = "jupyterhub"
+c.PAMAuthenticator.open_sessions = True
+
+# Bind on localhost; Caddy terminates TLS
+c.JupyterHub.bind_url = "http://127.0.0.1:8000"
+
+# Hub state
+c.JupyterHub.cookie_secret_file = "{{ hub_state_dir }}/jupyterhub_cookie_secret"
+c.JupyterHub.db_url = "sqlite:////{{ hub_state_dir }}/jupyterhub.sqlite"
+
+# Start users in JupyterLab
+c.Spawner.default_url = "/lab"
+
+# Authorization policy
+{% if allow_all %}
+c.Authenticator.allow_all = True
+{% else %}
+c.Authenticator.allow_all = False
+c.Authenticator.allowed_users = {{ allowed_users | to_json }}
+{% endif %}
+
+# Hub admins
+c.Authenticator.admin_users = {{ admin_users | to_json }}

@@ -1,0 +1,87 @@
+---
+- name: Create venv dir
+  file:
+    path: "{{ venv_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: Create Python venv
+  command: "python3 -m venv {{ venv_dir }}"
+  args:
+    creates: "{{ venv_dir }}/bin/activate"
+
+- name: Upgrade pip in venv
+  command: "{{ venv_dir }}/bin/python -m pip install --upgrade pip"
+
+- name: Install JupyterHub + Lab
+  command: "{{ venv_dir }}/bin/python -m pip install 'jupyterhub>=5' jupyterlab"
+
+- name: Install configurable-http-proxy (global)
+  command: "npm install -g configurable-http-proxy"
+  args:
+    creates: /usr/local/bin/configurable-http-proxy
+
+- name: Create JupyterHub directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ jhub_user }}"
+    group: "{{ jhub_user }}"
+    mode: "0755"
+  loop:
+    - "{{ hub_state_dir }}"
+    - "{{ hub_cfg_dir }}"
+
+- name: Place PAM service for JupyterHub
+  copy:
+    src: pam.d.jupyterhub
+    dest: /etc/pam.d/jupyterhub
+    mode: "0644"
+
+- name: Place JupyterHub config
+  template:
+    src: jupyterhub_config.py.j2
+    dest: "{{ hub_cfg_dir }}/jupyterhub_config.py"
+    owner: "{{ jhub_user }}"
+    group: "{{ jhub_user }}"
+    mode: "0644"
+
+- name: Create Hub cookie secret if missing
+  shell: "openssl rand -hex 32 > {{ hub_state_dir }}/jupyterhub_cookie_secret"
+  args:
+    creates: "{{ hub_state_dir }}/jupyterhub_cookie_secret"
+
+- name: Secure cookie secret
+  file:
+    path: "{{ hub_state_dir }}/jupyterhub_cookie_secret"
+    owner: "{{ jhub_user }}"
+    group: "{{ jhub_user }}"
+    mode: "0600"
+
+- name: systemd unit for JupyterHub
+  copy:
+    dest: /etc/systemd/system/jupyterhub.service
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=JupyterHub
+      After=network.target
+
+      [Service]
+      User={{ jhub_user }}
+      Group={{ jhub_user }}
+      Environment="PATH={{ venv_dir }}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+      ExecStart={{ venv_dir }}/bin/jupyterhub -f {{ hub_cfg_dir }}/jupyterhub_config.py
+      WorkingDirectory={{ hub_cfg_dir }}
+      Restart=on-failure
+      RestartSec=5
+
+      [Install]
+      WantedBy=multi-user.target
+  notify: reload jupyterhub
+
+- name: Enable & start JupyterHub
+  systemd:
+    name: jupyterhub
+    enabled: true
+    state: started

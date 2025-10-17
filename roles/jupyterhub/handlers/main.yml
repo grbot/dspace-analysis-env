@@ -1,0 +1,5 @@
+---
+- name: reload jupyterhub
+  systemd:
+    name: jupyterhub
+    state: restarted

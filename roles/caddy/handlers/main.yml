@@ -1,0 +1,9 @@
+---
+- name: apt update
+  apt:
+    update_cache: true
+
+- name: reload caddy
+  systemd:
+    name: caddy
+    state: restarted

@@ -1,0 +1,6 @@
+# PAM policy for JupyterHub (Ubuntu/Debian)
+auth       include      common-auth
+account    include      common-account
+password   include      common-password
+session    include      common-session
+session    optional     pam_systemd.so

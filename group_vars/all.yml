@@ -1,0 +1,15 @@
+# ==== GLOBAL VARS ====
+domain_name: "mmupudu.ub.bw"         # <-- change to your DNS name
+acme_email: "gerrit.botha@uct.ac.za"        # optional, recommended
+allow_all: true                        # set false to whitelist users
+allowed_users: []                      # e.g. ["gerrit","alice"] if allow_all=false
+admin_users: ["gerrit"]                # Hub admins
+
+# Paths and users
+jhub_user: jhub
+venv_dir: /opt/jhub-venv
+hub_state_dir: /var/lib/jupyterhub
+hub_cfg_dir: /etc/jupyterhub
+
+# Whether to open firewall if UFW is enabled
+manage_ufw: true
